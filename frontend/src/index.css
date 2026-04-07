@@ -1,0 +1,108 @@
+/* GridCool "mission control" theme + Tailwind entrypoint */
+@import "tailwindcss";
+
+:root {
+  --gc-bg: #0a0f1e;
+  --gc-panel: rgba(12, 18, 36, 0.72);
+  --gc-panel-border: rgba(64, 87, 140, 0.35);
+  --gc-text: #d7e2ff;
+  --gc-muted: rgba(215, 226, 255, 0.7);
+  --gc-blue: #00d4ff;
+  --gc-amber: #ffaa00;
+  --gc-red: #ff4444;
+  --gc-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+    "Courier New", monospace;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: radial-gradient(1200px 700px at 20% 10%, rgba(0, 212, 255, 0.10), transparent 55%),
+    radial-gradient(900px 600px at 85% 30%, rgba(255, 170, 0, 0.08), transparent 55%),
+    var(--gc-bg);
+  color: var(--gc-text);
+}
+
+/* Crisp Leaflet tiles on dark UI */
+.leaflet-container {
+  background: rgba(10, 15, 30, 0.8);
+}
+
+/* App-wide polish */
+* {
+  box-sizing: border-box;
+}
+
+::selection {
+  background: rgba(0, 212, 255, 0.25);
+}
+
+.gc-grid {
+  background-image: linear-gradient(rgba(255, 255, 255, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.05) 1px, transparent 1px);
+  background-size: 44px 44px;
+  background-position: 0 0, 0 0;
+  mask-image: radial-gradient(closest-side at 50% 25%, black, transparent 80%);
+}
+
+/* Leaflet markers: glowing dot with pulse */
+.gc-marker {
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  position: relative;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.15), 0 0 16px rgba(0, 212, 255, 0.35);
+}
+.gc-marker::after {
+  content: "";
+  position: absolute;
+  inset: -18px;
+  border-radius: 999px;
+  background: radial-gradient(circle, rgba(0, 212, 255, 0.22), transparent 60%);
+  animation: gc-pulse 1.8s ease-in-out infinite;
+}
+.gc-marker.warning {
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.15), 0 0 16px rgba(255, 170, 0, 0.35);
+}
+.gc-marker.warning::after {
+  background: radial-gradient(circle, rgba(255, 170, 0, 0.22), transparent 60%);
+}
+.gc-marker.critical {
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.15), 0 0 16px rgba(255, 68, 68, 0.4);
+}
+.gc-marker.critical::after {
+  background: radial-gradient(circle, rgba(255, 68, 68, 0.22), transparent 60%);
+}
+
+/* Dispatch emphasis: faster pulse + bigger halo */
+.gc-marker.dispatch::after {
+  animation-duration: 1.05s;
+  inset: -24px;
+  opacity: 0.75;
+}
+.gc-marker.warning.dispatch::after {
+  opacity: 0.7;
+}
+.gc-marker.critical.dispatch::after {
+  opacity: 0.7;
+}
+
+@keyframes gc-pulse {
+  0% {
+    transform: scale(0.86);
+    opacity: 0.55;
+  }
+  70% {
+    transform: scale(1.08);
+    opacity: 0.18;
+  }
+  100% {
+    transform: scale(0.86);
+    opacity: 0.55;
+  }
+}

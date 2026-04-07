@@ -1,0 +1,27 @@
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Backend virtualenv
+backend/.venv/
+backend/.env
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Frontend build
+frontend/dist/
+frontend/.env
+
+# Cursor / IDE
+.cursor/
+.vscode/
