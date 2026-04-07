@@ -14,8 +14,9 @@ function severityMeta(sev: Severity) {
 export function StressGauge(props: { score: number; severity: Severity }) {
   const meta = severityMeta(props.severity)
 
-  // Map 0..100 to -135..135 degrees for a dial sweep.
-  const angle = -135 + (clamp(props.score, 0, 100) / 100) * 270
+  // Map 0..100 to a true top-semicircle sweep (-180..0 degrees).
+  // 0 => far left, 100 => far right.
+  const angle = -180 + (clamp(props.score, 0, 100) / 100) * 180
 
   return (
     <div className="grid gap-3 md:grid-cols-[1fr_auto] md:items-center">
@@ -41,34 +42,40 @@ export function StressGauge(props: { score: number; severity: Severity }) {
 
         {/* ticks */}
         <div className="absolute inset-0">
-          {Array.from({ length: 13 }).map((_, i) => {
-            const a = (-135 + (270 / 12) * i) * (Math.PI / 180)
+          {Array.from({ length: 11 }).map((_, i) => {
+            const a = (-180 + (180 / 10) * i) * (Math.PI / 180)
             const cx = 120
             const cy = 118
             const r1 = 78
-            const r2 = i % 3 === 0 ? 62 : 68
+            const r2 = i % 5 === 0 ? 60 : 68
             const x1 = cx + r1 * Math.cos(a)
             const y1 = cy + r1 * Math.sin(a)
             const x2 = cx + r2 * Math.cos(a)
             const y2 = cy + r2 * Math.sin(a)
             return (
               <svg key={i} className="absolute inset-0" viewBox="0 0 240 140">
-                <line x1={x1} y1={y1} x2={x2} y2={y2} stroke="rgba(255,255,255,0.18)" strokeWidth={i % 3 === 0 ? 2 : 1} />
+                <line
+                  x1={x1}
+                  y1={y1}
+                  x2={x2}
+                  y2={y2}
+                  stroke="rgba(255,255,255,0.18)"
+                  strokeWidth={i % 5 === 0 ? 2 : 1}
+                />
               </svg>
             )
           })}
         </div>
 
-        {/* needle */}
-        <div className="absolute left-1/2 top-[108px] h-0 w-0">
+        {/* needle (pivot aligned to tick center at y=118) */}
+        <div className="absolute left-1/2 top-[118px] h-0 w-0">
           <motion.div
             animate={{ rotate: angle }}
             transition={{ type: 'spring', stiffness: 90, damping: 14 }}
             className="origin-left"
-            style={{ rotate: angle }}
           >
             <div
-              className="h-[3px] w-[74px] rounded-full"
+              className="h-[3px] w-[82px] rounded-full"
               style={{ background: meta.color, boxShadow: `0 0 18px ${meta.color}` }}
             />
           </motion.div>

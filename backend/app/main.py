@@ -9,6 +9,8 @@ from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import get_settings
+from app.db.mongo import close_mongo, connect_mongo, ping_mongo
+from app.routers.buildings import router as buildings_router
 from app.routers.demo import router as demo_router
 from app.state import demo_engine, ws_manager
 
@@ -34,6 +36,9 @@ async def lifespan(app: FastAPI):
             await ws_manager.broadcast_json(snapshot)
             await asyncio.sleep(settings.WS_BROADCAST_INTERVAL_SECONDS)
 
+    # Best-effort DB connection for Phase 1 (works with Atlas or local Mongo).
+    connect_mongo()
+
     task = asyncio.create_task(_broadcast_loop())
     try:
         yield
@@ -42,10 +47,12 @@ async def lifespan(app: FastAPI):
         task.cancel()
         with contextlib.suppress(Exception):
             await task
+        close_mongo()
 
 
 app = FastAPI(title=settings.APP_NAME, lifespan=lifespan)
 app.include_router(demo_router)
+app.include_router(buildings_router)
 
 app.add_middleware(
     CORSMiddleware,
@@ -63,7 +70,7 @@ app.add_middleware(
 
 @app.get("/health")
 async def health() -> dict[str, str]:
-    return {"status": "ok", "app": settings.APP_NAME}
+    return {"status": "ok", "app": settings.APP_NAME, "mongo_ok": str(await ping_mongo()).lower()}
 
 
 @app.websocket("/ws/dashboard")

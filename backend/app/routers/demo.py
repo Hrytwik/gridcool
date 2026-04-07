@@ -7,6 +7,8 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from app.core.config import get_settings
+from app.models.building import Building
+from app.routers.buildings import persist_enrollment_if_possible
 from app.state import demo_engine
 
 
@@ -49,7 +51,7 @@ def trigger_dispatch(req: TriggerDispatchRequest) -> dict[str, object]:
 
 
 @router.post("/enroll-building")
-def enroll_building(req: EnrollBuildingRequest) -> dict[str, object]:
+async def enroll_building(req: EnrollBuildingRequest) -> dict[str, object]:
     if not settings.DEMO_MODE:
         raise HTTPException(status_code=403, detail="Not available when DEMO_MODE is off")
     now = datetime.now(tz=ZoneInfo("Asia/Kolkata"))
@@ -60,5 +62,7 @@ def enroll_building(req: EnrollBuildingRequest) -> dict[str, object]:
         ac_count=req.ac_count,
         now=now,
     )
-    return {"ok": True, "building": b.__dict__}
+    building = Building(**b.__dict__)
+    await persist_enrollment_if_possible(building)
+    return {"ok": True, "building": building.model_dump()}
 
