@@ -12,6 +12,7 @@ import { OwnerPortal } from './views/OwnerPortal'
 import { AdminPanel } from './views/AdminPanel'
 import { ConnectionBanner } from './components/ConnectionBanner'
 import { Skeleton } from './components/Skeleton'
+import { ThermalIntelligencePanel } from './components/ThermalIntelligencePanel'
 
 function App() {
   const { status, snapshot, lastError, wsUrl } = useDashboardSocket()
@@ -189,6 +190,7 @@ function App() {
               )}
 
               {snapshot ? <CreditCounter value={snapshot.credits_inr} accent={accent} /> : <Skeleton className="h-[140px] w-full" />}
+              {snapshot ? <ThermalIntelligencePanel buildings={snapshot.buildings} /> : <Skeleton className="h-[420px] w-full" />}
               <OperatorConsole dispatchActive={dispatchActive} />
             </div>
           </div>

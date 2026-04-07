@@ -4,6 +4,20 @@ import { useEffect, useMemo, useState } from 'react'
 import { MapContainer, Marker, TileLayer, Tooltip as LeafletTooltip, ZoomControl } from 'react-leaflet'
 import type { DashboardBuilding, Severity } from '../lib/dashboardTypes'
 
+function ctMeta(ct?: string | null) {
+  switch (ct) {
+    case 'top_floor':
+      return { label: 'TOP FLOOR', color: 'var(--gc-red)', border: 'rgba(255,68,68,0.40)' }
+    case 'corner_unit':
+      return { label: 'CORNER', color: 'var(--gc-amber)', border: 'rgba(255,170,0,0.40)' }
+    case 'ground_floor':
+      return { label: 'GROUND', color: 'rgba(255,220,120,0.95)', border: 'rgba(255,220,120,0.28)' }
+    case 'mid_floor':
+    default:
+      return { label: 'MID FLOOR', color: 'rgba(0,212,255,0.95)', border: 'rgba(0,212,255,0.35)' }
+  }
+}
+
 function markerHtml(sev: Severity, dispatchActive: boolean) {
   const base =
     sev === 'critical' ? 'gc-marker critical' : sev === 'warning' ? 'gc-marker warning' : 'gc-marker'
@@ -117,7 +131,41 @@ export function ChennaiMap(props: {
               <LeafletTooltip direction="top" offset={[0, -6]} opacity={1}>
                 <div className="font-mono text-xs">
                   <div className="font-sans text-sm">{b.name}</div>
-                  <div style={{ opacity: 0.8 }}>{b.ac_count} AC • {b.enrolled_kw.toFixed(1)} kW</div>
+                  <div style={{ opacity: 0.85 }}>{b.ac_count} AC • {b.enrolled_kw.toFixed(1)} kW</div>
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    {(() => {
+                      const tf = b.thermal_fingerprint
+                      const ct = tf?.construction_type
+                      const m = ctMeta(ct ?? null)
+                      return (
+                        <span
+                          className="rounded-full border bg-black/20 px-2 py-1 font-mono text-[10px] tracking-[0.18em]"
+                          style={{ borderColor: m.border, color: m.color }}
+                        >
+                          {m.label}
+                        </span>
+                      )
+                    })()}
+                    {b.thermal_fingerprint?.thermal_mass_class ? (
+                      <span className="rounded-full border border-[rgba(215,226,255,0.18)] bg-black/20 px-2 py-1 font-mono text-[10px] tracking-[0.18em] text-[rgba(215,226,255,0.85)]">
+                        MASS {String(b.thermal_fingerprint.thermal_mass_class).toUpperCase()}
+                      </span>
+                    ) : null}
+                    {typeof b.thermal_fingerprint?.flexibility_window_minutes === 'number' ? (
+                      <span className="rounded-full border border-[rgba(0,212,255,0.18)] bg-black/20 px-2 py-1 font-mono text-[10px] tracking-[0.18em] text-[rgba(0,212,255,0.9)]">
+                        {Math.round(b.thermal_fingerprint.flexibility_window_minutes)} MIN FLEX
+                      </span>
+                    ) : null}
+                  </div>
+                  {b.thermal_fingerprint?.calibration_status === 'calibrating' ? (
+                    <div className="mt-2 font-mono text-[10px] text-[rgba(215,226,255,0.75)]">
+                      Calibrating ({b.thermal_fingerprint.calibration_progress_pct ?? 0}%)
+                    </div>
+                  ) : b.thermal_fingerprint?.calibration_status === 'fingerprinted' ? (
+                    <div className="mt-2 font-mono text-[10px] text-[rgba(0,212,255,0.9)]">
+                      Fingerprinted ✓
+                    </div>
+                  ) : null}
                 </div>
               </LeafletTooltip>
             </Marker>

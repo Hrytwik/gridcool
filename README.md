@@ -43,3 +43,16 @@ Open `http://localhost:5173/`.
 - `GET /buildings` — list buildings (demo fleet + newly enrolled)
 - `GET /buildings/{building_id}` — building details
 
+## Thermal fingerprinting (Phase 1)
+
+GridCool infers per-building thermal characteristics passively from MirAIe AC telemetry (no surveys):
+- RC model parameters: `rc_r`, `rc_c`
+- Flexibility window (minutes) the AC can be off while staying within comfort band
+- Construction type classifier (India typologies): `top_floor`, `ground_floor`, `corner_unit`, `mid_floor`
+- Calibration flow: new buildings show **Calibrating…** then become **Fingerprinted ✓** (demo: ~8s)
+
+Thermal APIs:
+- `GET /thermal/buildings/{building_id}` — full thermal fingerprint
+- `GET /thermal/fleet` — all fingerprints + fleet summary
+- `POST /thermal/recalibrate/{building_id}` — trigger recalibration (demo: instant)
+

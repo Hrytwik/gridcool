@@ -12,6 +12,7 @@ from app.core.config import get_settings
 from app.db.mongo import close_mongo, connect_mongo, ping_mongo
 from app.routers.buildings import router as buildings_router
 from app.routers.demo import router as demo_router
+from app.routers.thermal import router as thermal_router
 from app.state import demo_engine, ws_manager
 
 
@@ -53,6 +54,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title=settings.APP_NAME, lifespan=lifespan)
 app.include_router(demo_router)
 app.include_router(buildings_router)
+app.include_router(thermal_router)
 
 app.add_middleware(
     CORSMiddleware,

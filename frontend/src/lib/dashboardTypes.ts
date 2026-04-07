@@ -1,5 +1,15 @@
 export type Severity = 'ok' | 'warning' | 'critical'
 
+export type ThermalFingerprint = {
+  flexibility_window_minutes: number
+  construction_type: 'top_floor' | 'ground_floor' | 'corner_unit' | 'mid_floor'
+  thermal_mass_class: 'low' | 'medium' | 'high'
+  calibration_status: 'calibrating' | 'fingerprinted'
+  calibration_progress_pct: number
+  rc_r?: number
+  rc_c?: number
+}
+
 export type DashboardBuilding = {
   building_id: string
   name: string
@@ -10,6 +20,7 @@ export type DashboardBuilding = {
   severity: Severity
   last_action: string | null
   last_ack?: string | null
+  thermal_fingerprint?: ThermalFingerprint | null
 }
 
 export type DemandPoint = {

@@ -21,6 +21,7 @@ export function BuildingDrawer(props: {
   const b = props.building
   const dispatchUntil = props.snapshot?.demo.dispatch_until
   const devices = b ? makeDevices(b) : []
+  const tf = b?.thermal_fingerprint ?? null
 
   const creditsShare = (() => {
     if (!b || !props.snapshot) return 0
@@ -112,6 +113,56 @@ export function BuildingDrawer(props: {
                     ) : (
                       <div className="text-[var(--gc-muted)]">No ACK yet (waiting for MirAIe fleet)…</div>
                     )}
+                  </div>
+                </div>
+
+                <div className="mt-4 rounded-2xl border border-[var(--gc-panel-border)] bg-black/25 p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="text-xs uppercase tracking-[0.26em] text-[var(--gc-muted)]">
+                      Thermal fingerprint (RC model)
+                    </div>
+                    <div className="font-mono text-[10px] text-[var(--gc-muted)]">
+                      {tf?.calibration_status === 'calibrating'
+                        ? `calibrating ${tf.calibration_progress_pct ?? 0}%`
+                        : tf?.calibration_status === 'fingerprinted'
+                          ? 'fingerprinted ✓'
+                          : ''}
+                    </div>
+                  </div>
+
+                  <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                    <div className="rounded-2xl border border-[var(--gc-panel-border)] bg-black/20 p-3">
+                      <div className="font-mono text-[10px] tracking-[0.22em] text-[var(--gc-muted)] uppercase">Flexibility</div>
+                      <div className="mt-2 text-2xl font-semibold">
+                        {typeof tf?.flexibility_window_minutes === 'number'
+                          ? `${Math.round(tf.flexibility_window_minutes)} min`
+                          : '—'}
+                      </div>
+                      <div className="mt-1 font-mono text-xs text-[var(--gc-muted)]">
+                        Comfort band: ±1.5°C (demo)
+                      </div>
+                    </div>
+
+                    <div className="rounded-2xl border border-[var(--gc-panel-border)] bg-black/20 p-3">
+                      <div className="font-mono text-[10px] tracking-[0.22em] text-[var(--gc-muted)] uppercase">Construction type</div>
+                      <div className="mt-2 text-2xl font-semibold">
+                        {tf?.construction_type ? tf.construction_type.replace('_', ' ') : '—'}
+                      </div>
+                      <div className="mt-1 font-mono text-xs text-[var(--gc-muted)]">
+                        Thermal mass: {tf?.thermal_mass_class ?? '—'}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="mt-3 rounded-2xl border border-[var(--gc-panel-border)] bg-black/20 p-3">
+                    <div className="font-mono text-[10px] tracking-[0.22em] text-[var(--gc-muted)] uppercase">RC parameters</div>
+                    <div className="mt-2 grid gap-2 sm:grid-cols-2 font-mono text-xs text-[rgba(215,226,255,0.85)]">
+                      <div>R: {typeof tf?.rc_r === 'number' ? tf.rc_r.toFixed(3) : '—'}</div>
+                      <div>C: {typeof tf?.rc_c === 'number' ? tf.rc_c.toFixed(3) : '—'}</div>
+                    </div>
+                    <div className="mt-2 font-mono text-[10px] text-[var(--gc-muted)]">
+                      GridCool infers this from MirAIe telemetry (compressor cycles, time-to-target, rebound rate). No surveys.
+                    </div>
                   </div>
                 </div>
 
