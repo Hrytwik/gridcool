@@ -28,7 +28,13 @@ class DashboardBuilding(TypedDict):
     severity: Severity
     last_action: str | None
     last_ack: str | None
-    thermal_fingerprint: dict[str, object] | None
+    thermal_summary: dict[str, object]
+
+
+class ACUnit(TypedDict):
+    ac_id: str
+    building_id: str
+    unit_label: str
 
 
 class DemandPoint(TypedDict):
@@ -75,18 +81,76 @@ class DemoSimEngine:
     _forced_stress_score: int | None = None
     _pending_acks: dict[str, datetime] = field(default_factory=dict)
     _last_ack_by_building: dict[str, str] = field(default_factory=dict)
-    _fingerprints: dict[str, ThermalFingerprint] = field(default_factory=dict)
-    _calibration_started_at: dict[str, datetime] = field(default_factory=dict)
+    _acs_by_building: dict[str, list[ACUnit]] = field(default_factory=dict)
+    _fingerprints_by_ac: dict[str, ThermalFingerprint] = field(default_factory=dict)
+    _calibration_started_at_by_ac: dict[str, datetime] = field(default_factory=dict)
     _dispatch_peak_at: datetime | None = None
     _dispatch_schedule_at: dict[str, datetime] = field(default_factory=dict)
+    _dispatch_schedule_at_by_ac: dict[str, datetime] = field(default_factory=dict)
     _events: list[str] = None  # type: ignore[assignment]
     _last_tick: datetime | None = None
 
     def __post_init__(self) -> None:
         self._events = []
-        # Seeded buildings are already fingerprinted for the demo.
         for b in self.seeded_buildings:
-            self._fingerprints[b.building_id] = generate_demo_fingerprint(b.building_id, seed=42)
+            self._seed_building_acs(b)
+
+    def _construction_distribution(self, building: SeedBuilding) -> dict[ConstructionType, int]:
+        seed = int(building.building_id.split("_")[-1]) if "_" in building.building_id else 42
+        n = max(1, int(building.ac_count))
+        top = min(n, max(0, int(round(n * (0.10 + ((seed * 3) % 7) / 100.0)))))
+        ground = min(n - top, max(0, int(round(n * (0.06 + ((seed * 5) % 5) / 100.0)))))
+        corner = min(n - top - ground, max(0, int(round(n * (0.10 + ((seed * 7) % 9) / 100.0)))))
+        mid = max(0, n - top - ground - corner)
+        counts: dict[ConstructionType, int] = {
+            "top_floor": top,
+            "ground_floor": ground,
+            "corner_unit": corner,
+            "mid_floor": mid,
+        }
+        if counts["mid_floor"] == 0 and n > 0:
+            counts["mid_floor"] = 1
+            if counts["top_floor"] > 0:
+                counts["top_floor"] -= 1
+            elif counts["corner_unit"] > 0:
+                counts["corner_unit"] -= 1
+            elif counts["ground_floor"] > 0:
+                counts["ground_floor"] -= 1
+        return counts
+
+    def _seed_building_acs(self, building: SeedBuilding, *, now: datetime | None = None, calibrating: bool = False) -> None:
+        dist = self._construction_distribution(building)
+        ctype_order: list[ConstructionType] = []
+        for ctype in ("mid_floor", "top_floor", "corner_unit", "ground_floor"):
+            ctype_order.extend([ctype] * dist[ctype])
+        ctype_order = ctype_order[: building.ac_count]
+        if len(ctype_order) < building.ac_count:
+            ctype_order.extend(["mid_floor"] * (building.ac_count - len(ctype_order)))
+
+        acs: list[ACUnit] = []
+        for i in range(building.ac_count):
+            ac_id = f"{building.building_id}_ac_{i + 1:03d}"
+            acs.append(
+                {
+                    "ac_id": ac_id,
+                    "building_id": building.building_id,
+                    "unit_label": f"Unit {i + 1:02d}",
+                }
+            )
+            if calibrating:
+                if now:
+                    self._calibration_started_at_by_ac[ac_id] = now
+                self._fingerprints_by_ac.pop(ac_id, None)
+            else:
+                fp = generate_demo_fingerprint(
+                    ac_id=ac_id,
+                    building_id=building.building_id,
+                    seed=42 + i,
+                    forced_type=ctype_order[i],
+                )
+                self._fingerprints_by_ac[ac_id] = fp
+                self._calibration_started_at_by_ac.pop(ac_id, None)
+        self._acs_by_building[building.building_id] = acs
 
     def enroll_building(self, *, name: str, lat: float, lng: float, ac_count: int, now: datetime) -> SeedBuilding:
         """
@@ -96,10 +160,8 @@ class DemoSimEngine:
         next_id = f"bld_{len(self.seeded_buildings) + 1:03d}"
         b = SeedBuilding(next_id, name, float(lat), float(lng), int(ac_count))
         self.seeded_buildings.append(b)
-        # Start calibration immediately (demo: resolves in ~8 seconds).
-        self._calibration_started_at[b.building_id] = now
-        # Default fingerprint placeholder (safe fallback).
-        self._fingerprints.pop(b.building_id, None)
+        # Start calibration for all AC units immediately (demo: resolves in ~8 seconds).
+        self._seed_building_acs(b, now=now, calibrating=True)
         self._events.insert(0, f"{now.strftime('%H:%M')} — Enrollment — {name} added ({ac_count} AC)")
         del self._events[30:]
         return b
@@ -125,16 +187,22 @@ class DemoSimEngine:
             # Peak time is assumed 60–120 minutes ahead (Phase 2 will use ML peak time).
             self._dispatch_peak_at = now + timedelta(minutes=75)
             self._dispatch_schedule_at = {}
+            self._dispatch_schedule_at_by_ac = {}
             self._events.insert(0, f"{now.strftime('%H:%M')} — Grid stress 82 — dispatch triggered (pre-cooling)")
             self._events.insert(0, f"{now.strftime('%H:%M')} — MirAIe fleet — setpoint -2°C for enrolled buildings")
-            # Schedule construction-type-aware pre-cooling start times.
+            # Schedule construction-type-aware pre-cooling start times per AC.
             for b in self.seeded_buildings:
-                fp = self._get_or_create_fingerprint(building_id=b.building_id, now=now)
-                ctype: ConstructionType = fp.construction_type if fp else "mid_floor"
-                lead = dispatch_lead_minutes_by_type(ctype)
+                starts: list[datetime] = []
+                for ac in self._acs_by_building.get(b.building_id, []):
+                    fp = self._get_or_create_fingerprint(ac_id=ac["ac_id"], building_id=b.building_id, now=now)
+                    ctype: ConstructionType = fp.construction_type if fp else "mid_floor"
+                    lead = dispatch_lead_minutes_by_type(ctype)
+                    peak_at = self._dispatch_peak_at or (now + timedelta(minutes=75))
+                    start_at = peak_at - timedelta(minutes=lead)
+                    starts.append(start_at)
+                    self._dispatch_schedule_at_by_ac[ac["ac_id"]] = start_at
                 peak_at = self._dispatch_peak_at or (now + timedelta(minutes=75))
-                start_at = peak_at - timedelta(minutes=lead)
-                self._dispatch_schedule_at[b.building_id] = start_at
+                self._dispatch_schedule_at[b.building_id] = min(starts) if starts else (peak_at - timedelta(minutes=90))
             # Queue per-building acknowledgements over the next ~20 seconds.
             self._pending_acks = {}
             for idx, b in enumerate(self.seeded_buildings):
@@ -158,7 +226,7 @@ class DemoSimEngine:
             self._events.insert(0, msg)
         del self._events[30:]
 
-    def _get_or_create_fingerprint(self, *, building_id: str, now: datetime) -> ThermalFingerprint | None:
+    def _get_or_create_fingerprint(self, *, ac_id: str, building_id: str, now: datetime) -> ThermalFingerprint | None:
         """
         Returns a fingerprint if building exists. For new buildings, computes it after
         calibration window (demo: 8 seconds). Always deterministic per building_id.
@@ -166,16 +234,17 @@ class DemoSimEngine:
 
         if not any(b.building_id == building_id for b in self.seeded_buildings):
             return None
+        if not any(ac["ac_id"] == ac_id for ac in self._acs_by_building.get(building_id, [])):
+            return None
 
-        # If already fingerprinted, return it.
-        fp = self._fingerprints.get(building_id)
-        started = self._calibration_started_at.get(building_id)
+        fp = self._fingerprints_by_ac.get(ac_id)
+        started = self._calibration_started_at_by_ac.get(ac_id)
 
         # If no calibration start, treat as already fingerprinted demo building.
         if started is None:
             if fp is None:
-                fp = generate_demo_fingerprint(building_id, seed=42)
-                self._fingerprints[building_id] = fp
+                fp = generate_demo_fingerprint(ac_id=ac_id, building_id=building_id, seed=42)
+                self._fingerprints_by_ac[ac_id] = fp
             return fp
 
         elapsed = (now - started).total_seconds()
@@ -183,9 +252,9 @@ class DemoSimEngine:
             return None
 
         # Create deterministic fingerprint via simulated telemetry.
-        seed = int(building_id.split("_")[-1]) if "_" in building_id else 42
+        seed = int(ac_id.split("_")[-1]) if "_" in ac_id else 42
         # Use deterministic construction type from generator itself.
-        demo_fp = generate_demo_fingerprint(building_id, seed=seed)
+        demo_fp = generate_demo_fingerprint(ac_id=ac_id, building_id=building_id, seed=seed)
         telemetry = simulate_telemetry_72h(
             start=now - timedelta(hours=72),
             construction_type=demo_fp.construction_type,
@@ -198,6 +267,7 @@ class DemoSimEngine:
         # but recompute flexibility from the telemetry stream for realism.
         flex = demo_fp.flexibility_window_minutes
         fp2 = ThermalFingerprint(
+            ac_id=ac_id,
             building_id=building_id,
             rc_r=r,
             rc_c=c,
@@ -209,29 +279,30 @@ class DemoSimEngine:
             last_updated=now,
         )
 
-        self._fingerprints[building_id] = fp2
-        self._calibration_started_at.pop(building_id, None)
+        self._fingerprints_by_ac[ac_id] = fp2
+        self._calibration_started_at_by_ac.pop(ac_id, None)
         self._events.insert(
             0,
-            f"{now.strftime('%H:%M:%S')} — Building {building_id} fingerprinted — {demo_fp.construction_type.replace('_', ' ').title()} — {flex:.0f} min flexibility",
+            f"{now.strftime('%H:%M:%S')} — AC {ac_id} fingerprinted — {demo_fp.construction_type.replace('_', ' ').title()} — {flex:.0f} min flexibility",
         )
         del self._events[30:]
         return fp2
 
-    def get_thermal_fingerprint(self, *, building_id: str, now: datetime) -> dict[str, object] | None:
-        fp = self._get_or_create_fingerprint(building_id=building_id, now=now)
-        started = self._calibration_started_at.get(building_id)
+    def get_ac_fingerprint(self, *, building_id: str, ac_id: str, now: datetime) -> dict[str, object] | None:
+        fp = self._get_or_create_fingerprint(ac_id=ac_id, building_id=building_id, now=now)
+        started = self._calibration_started_at_by_ac.get(ac_id)
+
         if fp is None and started is None:
-            # building not found
             if not any(b.building_id == building_id for b in self.seeded_buildings):
                 return None
+            return None
 
         if fp is None:
-            # calibrating
             progress = int(min(99, max(0, ((now - started).total_seconds() / 8.0) * 100))) if started else 0
-            # Safe fallback fingerprint while calibrating.
             return {
+                "ac_id": ac_id,
                 "building_id": building_id,
+                "floor_position": "mid_floor",
                 "rc_r": 3.0,
                 "rc_c": 3.0,
                 "flexibility_window_minutes": 45.0,
@@ -243,7 +314,9 @@ class DemoSimEngine:
             }
 
         return {
+            "ac_id": fp.ac_id,
             "building_id": fp.building_id,
+            "floor_position": fp.construction_type,
             "rc_r": fp.rc_r,
             "rc_c": fp.rc_c,
             "flexibility_window_minutes": fp.flexibility_window_minutes,
@@ -254,9 +327,64 @@ class DemoSimEngine:
             "last_updated": fp.last_updated.isoformat(),
         }
 
-    def get_thermal_fleet_summary(self, *, now: datetime) -> dict[str, object]:
-        fps = [self.get_thermal_fingerprint(building_id=b.building_id, now=now) for b in self.seeded_buildings]
+    def _building_thermal_summary(self, *, building_id: str, enrolled_kw: float, now: datetime) -> dict[str, object]:
+        acs = self._acs_by_building.get(building_id, [])
+        fps = [self.get_ac_fingerprint(building_id=building_id, ac_id=ac["ac_id"], now=now) for ac in acs]
         fps2 = [x for x in fps if x is not None]
+        if not fps2:
+            return {
+                "dominant_type": "mid_floor",
+                "weighted_flexibility_minutes": 45.0,
+                "type_breakdown": {
+                    "top_floor": {"count": 0, "avg_flexibility_minutes": 0.0},
+                    "ground_floor": {"count": 0, "avg_flexibility_minutes": 0.0},
+                    "corner_unit": {"count": 0, "avg_flexibility_minutes": 0.0},
+                    "mid_floor": {"count": 0, "avg_flexibility_minutes": 0.0},
+                },
+                "fingerprinted_ac_count": 0,
+                "calibrating_ac_count": 0,
+            }
+
+        type_totals: dict[str, tuple[int, float]] = {
+            "top_floor": (0, 0.0),
+            "ground_floor": (0, 0.0),
+            "corner_unit": (0, 0.0),
+            "mid_floor": (0, 0.0),
+        }
+        for x in fps2:
+            ct = str(x.get("construction_type", "mid_floor"))
+            c, s = type_totals.get(ct, (0, 0.0))
+            type_totals[ct] = (c + 1, s + float(x.get("flexibility_window_minutes", 45.0)))
+
+        dominant_type = max(type_totals.items(), key=lambda kv: kv[1][0])[0]
+        unit_kw = enrolled_kw / max(1, len(fps2))
+        weighted = sum(float(x.get("flexibility_window_minutes", 45.0)) * unit_kw for x in fps2) / max(
+            enrolled_kw, 0.0001
+        )
+        breakdown = {
+            k: {
+                "count": c,
+                "avg_flexibility_minutes": round((s / c), 1) if c > 0 else 0.0,
+            }
+            for k, (c, s) in type_totals.items()
+        }
+        fingerprinted = sum(1 for x in fps2 if x.get("calibration_status") == "fingerprinted")
+        calibrating = sum(1 for x in fps2 if x.get("calibration_status") == "calibrating")
+        return {
+            "dominant_type": dominant_type,
+            "weighted_flexibility_minutes": round(weighted, 1),
+            "type_breakdown": breakdown,
+            "fingerprinted_ac_count": fingerprinted,
+            "calibrating_ac_count": calibrating,
+        }
+
+    def get_thermal_fleet_summary(self, *, now: datetime) -> dict[str, object]:
+        fps2 = []
+        for b in self.seeded_buildings:
+            for ac in self._acs_by_building.get(b.building_id, []):
+                fp = self.get_ac_fingerprint(building_id=b.building_id, ac_id=ac["ac_id"], now=now)
+                if fp is not None:
+                    fps2.append(fp)
         fingerprinted = sum(1 for x in fps2 if x.get("calibration_status") == "fingerprinted")
         calibrating = sum(1 for x in fps2 if x.get("calibration_status") == "calibrating")
 
@@ -283,8 +411,10 @@ class DemoSimEngine:
     def recalibrate(self, *, building_id: str, now: datetime) -> bool:
         if not any(b.building_id == building_id for b in self.seeded_buildings):
             return False
-        self._fingerprints.pop(building_id, None)
-        self._calibration_started_at[building_id] = now - timedelta(seconds=8)  # demo: instant on next tick
+        for ac in self._acs_by_building.get(building_id, []):
+            ac_id = ac["ac_id"]
+            self._fingerprints_by_ac.pop(ac_id, None)
+            self._calibration_started_at_by_ac[ac_id] = now - timedelta(seconds=8)  # demo: instant on next tick
         self._events.insert(0, f"{now.strftime('%H:%M:%S')} — Thermal — recalibration requested for {building_id}")
         del self._events[30:]
         return True
@@ -390,12 +520,16 @@ class DemoSimEngine:
             # A rough AC capacity estimate: 1.4 kW per unit average.
             enrolled_kw_total += b.ac_count * 1.4
 
-        # Reduction is visible during peak window when dispatch is active. It scales by how many
-        # buildings have actually started pre-cooling (staggered by construction type).
-        active_buildings = 0
-        if self._dispatch_active and self._dispatch_schedule_at:
-            active_buildings = sum(1 for bid, t0 in self._dispatch_schedule_at.items() if now >= t0)
-        building_frac = (active_buildings / max(1, len(self.seeded_buildings))) if self._dispatch_active else 0.0
+        # Reduction is visible during peak window and scales with AC-level pre-cooling activation.
+        total_acs = sum(len(self._acs_by_building.get(b.building_id, [])) for b in self.seeded_buildings)
+        active_acs = 0
+        if self._dispatch_active:
+            for b in self.seeded_buildings:
+                for ac in self._acs_by_building.get(b.building_id, []):
+                    start_at = self._dispatch_schedule_at_by_ac.get(ac["ac_id"])
+                    if start_at and now >= start_at:
+                        active_acs += 1
+        building_frac = (active_acs / max(1, total_acs)) if self._dispatch_active else 0.0
         if self._dispatch_active:
             estimated_kw_reduction = round(enrolled_kw_total * 0.22 * max(0.15, building_frac), 1)
 
@@ -459,10 +593,15 @@ class DemoSimEngine:
                 b_sev = "ok"
 
             # Stagger pre-cooling by construction type schedule.
-            start_at = self._dispatch_schedule_at.get(b.building_id) if self._dispatch_active else None
-            is_precooling = bool(self._dispatch_active and start_at and now >= start_at)
+            is_precooling = False
+            if self._dispatch_active:
+                for ac in self._acs_by_building.get(b.building_id, []):
+                    t0 = self._dispatch_schedule_at_by_ac.get(ac["ac_id"])
+                    if t0 and now >= t0:
+                        is_precooling = True
+                        break
             last_action = "PRECOOLING" if is_precooling else None
-            tf = self.get_thermal_fingerprint(building_id=b.building_id, now=now)
+            summary = self._building_thermal_summary(building_id=b.building_id, enrolled_kw=enrolled_kw, now=now)
             buildings.append(
                 {
                     "building_id": b.building_id,
@@ -474,7 +613,7 @@ class DemoSimEngine:
                     "severity": b_sev,
                     "last_action": last_action,
                     "last_ack": self._last_ack_by_building.get(b.building_id),
-                    "thermal_fingerprint": tf,
+                    "thermal_summary": summary,
                 }
             )
 

@@ -34,8 +34,11 @@ export function ThermalIntelligencePanel(props: { buildings: DashboardBuilding[]
     }
 
     for (const b of bs) {
-      const ct = b.thermal_fingerprint?.construction_type ?? 'mid_floor'
-      breakdownCounts[ct] = (breakdownCounts[ct] ?? 0) + 1
+      const tb = b.thermal_summary?.type_breakdown
+      if (!tb) continue
+      for (const ct of ['top_floor', 'ground_floor', 'corner_unit', 'mid_floor'] as const) {
+        breakdownCounts[ct] = (breakdownCounts[ct] ?? 0) + (tb[ct]?.count ?? 0)
+      }
     }
 
     // Demo guarantee: convert kW fleet to a demo-scaled MW number.
@@ -54,9 +57,9 @@ export function ThermalIntelligencePanel(props: { buildings: DashboardBuilding[]
       .map((b) => ({
         id: b.building_id,
         name: b.name,
-        flex: b.thermal_fingerprint?.flexibility_window_minutes ?? 45,
-        ct: b.thermal_fingerprint?.construction_type ?? 'mid_floor',
-        status: b.thermal_fingerprint?.calibration_status ?? 'fingerprinted',
+        flex: b.thermal_summary?.weighted_flexibility_minutes ?? 45,
+        ct: b.thermal_summary?.dominant_type ?? 'mid_floor',
+        status: (b.thermal_summary?.calibrating_ac_count ?? 0) > 0 ? 'calibrating' : 'fingerprinted',
       }))
       .sort((a, b) => a.flex - b.flex)
 

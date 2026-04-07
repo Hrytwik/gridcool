@@ -55,6 +55,7 @@ ConstructionType = Literal["top_floor", "ground_floor", "corner_unit", "mid_floo
 
 @dataclass(frozen=True)
 class ThermalFingerprint:
+    ac_id: str
     building_id: str
     rc_r: float
     rc_c: float
@@ -184,20 +185,22 @@ def _thermal_mass_class_from_c(c: float) -> ThermalMassClass:
     return "low"
 
 
-def generate_demo_fingerprint(building_id: str, seed: int) -> ThermalFingerprint:
+def generate_demo_fingerprint(
+    *, ac_id: str, building_id: str, seed: int, forced_type: ConstructionType | None = None
+) -> ThermalFingerprint:
     """
     Deterministic fingerprint generator for demo mode.
     Same building_id -> same construction type + RC values + flexibility window.
     """
 
-    # Create a stable seed from building_id + seed.
-    s = _stable_int_seed(f"{building_id}:{seed}")
+    # Create a stable seed from AC id + building id + seed.
+    s = _stable_int_seed(f"{ac_id}:{building_id}:{seed}")
     # Map to pseudo "telemetry-derived" features.
     rebound_rate = 1.6 + (s % 170) / 100.0  # 1.6 .. 3.29
     time_to_target = 14.0 + ((s // 7) % 220) / 10.0  # 14 .. 36
     tod_variance = 0.4 + ((s // 17) % 160) / 100.0  # 0.4 .. 1.99
 
-    ctype = classify_construction_type(rebound_rate, time_to_target, tod_variance)
+    ctype = forced_type or classify_construction_type(rebound_rate, time_to_target, tod_variance)
 
     # Construction-type biased RC values (plausible ranges).
     if ctype == "top_floor":
@@ -221,6 +224,7 @@ def generate_demo_fingerprint(building_id: str, seed: int) -> ThermalFingerprint
     now = datetime.now()
 
     return ThermalFingerprint(
+        ac_id=ac_id,
         building_id=building_id,
         rc_r=round(float(r), 3),
         rc_c=round(float(c), 3),

@@ -134,8 +134,8 @@ export function ChennaiMap(props: {
                   <div style={{ opacity: 0.85 }}>{b.ac_count} AC • {b.enrolled_kw.toFixed(1)} kW</div>
                   <div className="mt-2 flex flex-wrap items-center gap-2">
                     {(() => {
-                      const tf = b.thermal_fingerprint
-                      const ct = tf?.construction_type
+                      const ts = b.thermal_summary
+                      const ct = ts?.dominant_type
                       const m = ctMeta(ct ?? null)
                       return (
                         <span
@@ -146,24 +146,19 @@ export function ChennaiMap(props: {
                         </span>
                       )
                     })()}
-                    {b.thermal_fingerprint?.thermal_mass_class ? (
-                      <span className="rounded-full border border-[rgba(215,226,255,0.18)] bg-black/20 px-2 py-1 font-mono text-[10px] tracking-[0.18em] text-[rgba(215,226,255,0.85)]">
-                        MASS {String(b.thermal_fingerprint.thermal_mass_class).toUpperCase()}
-                      </span>
-                    ) : null}
-                    {typeof b.thermal_fingerprint?.flexibility_window_minutes === 'number' ? (
+                    {typeof b.thermal_summary?.weighted_flexibility_minutes === 'number' ? (
                       <span className="rounded-full border border-[rgba(0,212,255,0.18)] bg-black/20 px-2 py-1 font-mono text-[10px] tracking-[0.18em] text-[rgba(0,212,255,0.9)]">
-                        {Math.round(b.thermal_fingerprint.flexibility_window_minutes)} MIN FLEX
+                        {Math.round(b.thermal_summary.weighted_flexibility_minutes)} MIN FLEX
                       </span>
                     ) : null}
                   </div>
-                  {b.thermal_fingerprint?.calibration_status === 'calibrating' ? (
+                  {b.thermal_summary?.calibrating_ac_count > 0 ? (
                     <div className="mt-2 font-mono text-[10px] text-[rgba(215,226,255,0.75)]">
-                      Calibrating ({b.thermal_fingerprint.calibration_progress_pct ?? 0}%)
+                      Calibrating ({b.thermal_summary.calibrating_ac_count}/{b.ac_count} ACs)
                     </div>
-                  ) : b.thermal_fingerprint?.calibration_status === 'fingerprinted' ? (
+                  ) : b.thermal_summary?.fingerprinted_ac_count > 0 ? (
                     <div className="mt-2 font-mono text-[10px] text-[rgba(0,212,255,0.9)]">
-                      Fingerprinted ✓
+                      Fingerprinted ({b.thermal_summary.fingerprinted_ac_count}/{b.ac_count}) ✓
                     </div>
                   ) : null}
                 </div>

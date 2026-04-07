@@ -1,13 +1,14 @@
 export type Severity = 'ok' | 'warning' | 'critical'
 
-export type ThermalFingerprint = {
-  flexibility_window_minutes: number
-  construction_type: 'top_floor' | 'ground_floor' | 'corner_unit' | 'mid_floor'
-  thermal_mass_class: 'low' | 'medium' | 'high'
-  calibration_status: 'calibrating' | 'fingerprinted'
-  calibration_progress_pct: number
-  rc_r?: number
-  rc_c?: number
+export type ThermalSummary = {
+  dominant_type: 'top_floor' | 'ground_floor' | 'corner_unit' | 'mid_floor'
+  weighted_flexibility_minutes: number
+  type_breakdown: Record<
+    'top_floor' | 'ground_floor' | 'corner_unit' | 'mid_floor',
+    { count: number; avg_flexibility_minutes: number }
+  >
+  fingerprinted_ac_count: number
+  calibrating_ac_count: number
 }
 
 export type DashboardBuilding = {
@@ -20,7 +21,7 @@ export type DashboardBuilding = {
   severity: Severity
   last_action: string | null
   last_ack?: string | null
-  thermal_fingerprint?: ThermalFingerprint | null
+  thermal_summary: ThermalSummary
 }
 
 export type DemandPoint = {

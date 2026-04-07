@@ -21,7 +21,7 @@ export function BuildingDrawer(props: {
   const b = props.building
   const dispatchUntil = props.snapshot?.demo.dispatch_until
   const devices = b ? makeDevices(b) : []
-  const tf = b?.thermal_fingerprint ?? null
+  const ts = b?.thermal_summary ?? null
 
   const creditsShare = (() => {
     if (!b || !props.snapshot) return 0
@@ -119,14 +119,10 @@ export function BuildingDrawer(props: {
                 <div className="mt-4 rounded-2xl border border-[var(--gc-panel-border)] bg-black/25 p-4">
                   <div className="flex items-center justify-between gap-3">
                     <div className="text-xs uppercase tracking-[0.26em] text-[var(--gc-muted)]">
-                      Thermal fingerprint (RC model)
+                      Thermal intelligence summary
                     </div>
                     <div className="font-mono text-[10px] text-[var(--gc-muted)]">
-                      {tf?.calibration_status === 'calibrating'
-                        ? `calibrating ${tf.calibration_progress_pct ?? 0}%`
-                        : tf?.calibration_status === 'fingerprinted'
-                          ? 'fingerprinted ✓'
-                          : ''}
+                      {ts ? `${ts.fingerprinted_ac_count}/${b?.ac_count ?? 0} fingerprinted` : ''}
                     </div>
                   </div>
 
@@ -134,8 +130,8 @@ export function BuildingDrawer(props: {
                     <div className="rounded-2xl border border-[var(--gc-panel-border)] bg-black/20 p-3">
                       <div className="font-mono text-[10px] tracking-[0.22em] text-[var(--gc-muted)] uppercase">Flexibility</div>
                       <div className="mt-2 text-2xl font-semibold">
-                        {typeof tf?.flexibility_window_minutes === 'number'
-                          ? `${Math.round(tf.flexibility_window_minutes)} min`
+                        {typeof ts?.weighted_flexibility_minutes === 'number'
+                          ? `${Math.round(ts.weighted_flexibility_minutes)} min`
                           : '—'}
                       </div>
                       <div className="mt-1 font-mono text-xs text-[var(--gc-muted)]">
@@ -146,22 +142,26 @@ export function BuildingDrawer(props: {
                     <div className="rounded-2xl border border-[var(--gc-panel-border)] bg-black/20 p-3">
                       <div className="font-mono text-[10px] tracking-[0.22em] text-[var(--gc-muted)] uppercase">Construction type</div>
                       <div className="mt-2 text-2xl font-semibold">
-                        {tf?.construction_type ? tf.construction_type.replace('_', ' ') : '—'}
+                        {ts?.dominant_type ? ts.dominant_type.replace('_', ' ') : '—'}
                       </div>
                       <div className="mt-1 font-mono text-xs text-[var(--gc-muted)]">
-                        Thermal mass: {tf?.thermal_mass_class ?? '—'}
+                        ACs calibrating: {ts?.calibrating_ac_count ?? 0}
                       </div>
                     </div>
                   </div>
 
                   <div className="mt-3 rounded-2xl border border-[var(--gc-panel-border)] bg-black/20 p-3">
-                    <div className="font-mono text-[10px] tracking-[0.22em] text-[var(--gc-muted)] uppercase">RC parameters</div>
-                    <div className="mt-2 grid gap-2 sm:grid-cols-2 font-mono text-xs text-[rgba(215,226,255,0.85)]">
-                      <div>R: {typeof tf?.rc_r === 'number' ? tf.rc_r.toFixed(3) : '—'}</div>
-                      <div>C: {typeof tf?.rc_c === 'number' ? tf.rc_c.toFixed(3) : '—'}</div>
+                    <div className="font-mono text-[10px] tracking-[0.22em] text-[var(--gc-muted)] uppercase">Type breakdown</div>
+                    <div className="mt-2 grid gap-2 font-mono text-xs text-[rgba(215,226,255,0.85)]">
+                      {(['mid_floor', 'top_floor', 'corner_unit', 'ground_floor'] as const).map((t) => (
+                        <div key={t}>
+                          {(ts?.type_breakdown[t]?.count ?? 0)} units {t.replace('_', ' ')} (
+                          {Math.round(ts?.type_breakdown[t]?.avg_flexibility_minutes ?? 0)} min avg)
+                        </div>
+                      ))}
                     </div>
                     <div className="mt-2 font-mono text-[10px] text-[var(--gc-muted)]">
-                      GridCool infers this from MirAIe telemetry (compressor cycles, time-to-target, rebound rate). No surveys.
+                      GridCool infers this per AC from MirAIe telemetry (compressor cycles, time-to-target, rebound rate).
                     </div>
                   </div>
                 </div>
