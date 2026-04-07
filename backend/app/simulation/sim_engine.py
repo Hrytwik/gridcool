@@ -98,24 +98,50 @@ class DemoSimEngine:
     def _construction_distribution(self, building: SeedBuilding) -> dict[ConstructionType, int]:
         seed = int(building.building_id.split("_")[-1]) if "_" in building.building_id else 42
         n = max(1, int(building.ac_count))
-        top = min(n, max(0, int(round(n * (0.10 + ((seed * 3) % 7) / 100.0)))))
-        ground = min(n - top, max(0, int(round(n * (0.06 + ((seed * 5) % 5) / 100.0)))))
-        corner = min(n - top - ground, max(0, int(round(n * (0.10 + ((seed * 7) % 9) / 100.0)))))
-        mid = max(0, n - top - ground - corner)
+        # Deterministic archetypes to avoid "everything mid-floor" bias.
+        # This creates realistic diversity across a small demo fleet.
+        archetypes: list[dict[ConstructionType, float]] = [
+            {"mid_floor": 0.30, "top_floor": 0.40, "corner_unit": 0.20, "ground_floor": 0.10},  # top-heavy tower
+            {"mid_floor": 0.25, "top_floor": 0.15, "corner_unit": 0.45, "ground_floor": 0.15},  # corner-heavy block
+            {"mid_floor": 0.20, "top_floor": 0.10, "corner_unit": 0.20, "ground_floor": 0.50},  # ground-heavy low rise
+            {"mid_floor": 0.55, "top_floor": 0.15, "corner_unit": 0.20, "ground_floor": 0.10},  # mixed tower
+            {"mid_floor": 0.45, "top_floor": 0.25, "corner_unit": 0.20, "ground_floor": 0.10},  # warm roof load
+        ]
+        profile = archetypes[seed % len(archetypes)]
+
         counts: dict[ConstructionType, int] = {
-            "top_floor": top,
-            "ground_floor": ground,
-            "corner_unit": corner,
-            "mid_floor": mid,
+            "top_floor": int(round(n * profile["top_floor"])),
+            "ground_floor": int(round(n * profile["ground_floor"])),
+            "corner_unit": int(round(n * profile["corner_unit"])),
+            "mid_floor": int(round(n * profile["mid_floor"])),
         }
-        if counts["mid_floor"] == 0 and n > 0:
-            counts["mid_floor"] = 1
-            if counts["top_floor"] > 0:
-                counts["top_floor"] -= 1
-            elif counts["corner_unit"] > 0:
-                counts["corner_unit"] -= 1
-            elif counts["ground_floor"] > 0:
-                counts["ground_floor"] -= 1
+
+        total = sum(counts.values())
+        if total > n:
+            # Trim from the most over-represented categories first.
+            for ctype in sorted(counts.keys(), key=lambda k: counts[k], reverse=True):
+                if total <= n:
+                    break
+                if counts[ctype] > 0:
+                    counts[ctype] -= 1
+                    total -= 1
+        elif total < n:
+            # Fill remaining slots deterministically.
+            fill_order: list[ConstructionType] = ["mid_floor", "top_floor", "corner_unit", "ground_floor"]
+            i = 0
+            while total < n:
+                counts[fill_order[i % len(fill_order)]] += 1
+                total += 1
+                i += 1
+
+        # Ensure each type appears at least once when building size allows.
+        if n >= 8:
+            for ctype in ("top_floor", "ground_floor", "corner_unit"):
+                if counts[ctype] == 0:
+                    counts[ctype] = 1
+                    donor = max(("mid_floor", "top_floor", "corner_unit", "ground_floor"), key=lambda k: counts[k])
+                    if donor != ctype and counts[donor] > 1:
+                        counts[donor] -= 1
         return counts
 
     def _seed_building_acs(self, building: SeedBuilding, *, now: datetime | None = None, calibrating: bool = False) -> None:
