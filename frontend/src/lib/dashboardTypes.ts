@@ -48,5 +48,12 @@ export type DashboardSnapshot = {
     dispatch_active: boolean
     dispatch_until: string | null
   }
+  /** Present when backend has USE_ML_FORECAST enabled */
+  ml?: {
+    enabled: boolean
+    source: 'ml' | 'sim_fallback'
+    artifact_status: 'loaded' | 'missing' | 'error'
+    last_refresh_ts: string
+  } | null
 }
 

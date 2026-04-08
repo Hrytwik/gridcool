@@ -3,8 +3,11 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Literal, TypedDict
+from typing import Any, Literal, NotRequired, TypedDict
 
+from app.core.config import get_settings
+from app.integrations.miraie_adapter import DemoMiraieAdapter
+from app.services.credits_ledger import schedule_append_credits_ledger_entry, schedule_dispatch_event
 from app.simulation.seed import SeedBuilding
 from app.thermal.fingerprint import (
     ConstructionType,
@@ -57,6 +60,7 @@ class DashboardSnapshot(TypedDict):
     demand_curve: list[DemandPoint]
     events: list[str]
     demo: dict[str, object]
+    ml: NotRequired[dict[str, object] | None]
 
 
 @dataclass
@@ -89,11 +93,19 @@ class DemoSimEngine:
     _dispatch_schedule_at_by_ac: dict[str, datetime] = field(default_factory=dict)
     _events: list[str] = None  # type: ignore[assignment]
     _last_tick: datetime | None = None
+    miraie_adapter: Any = field(default_factory=DemoMiraieAdapter)
+    _credits_inr_by_building: dict[str, float] = field(default_factory=dict)
+    _last_auto_dispatch_at: datetime | None = None
 
     def __post_init__(self) -> None:
         self._events = []
         for b in self.seeded_buildings:
             self._seed_building_acs(b)
+
+    def can_auto_dispatch(self, *, now: datetime, cooldown_minutes: int) -> bool:
+        if self._last_auto_dispatch_at is None:
+            return True
+        return (now - self._last_auto_dispatch_at).total_seconds() >= float(cooldown_minutes) * 60.0
 
     def _construction_distribution(self, building: SeedBuilding) -> dict[ConstructionType, int]:
         seed = int(building.building_id.split("_")[-1]) if "_" in building.building_id else 42
@@ -202,9 +214,17 @@ class DemoSimEngine:
         self._events.insert(0, f"{now.strftime('%H:%M')} — Operator — forced grid stress to {self._forced_stress_score} for {minutes}m")
         del self._events[30:]
 
-    def trigger_dispatch(self, *, now: datetime, minutes: int = 90) -> None:
+    def trigger_dispatch(
+        self,
+        *,
+        now: datetime,
+        minutes: int = 90,
+        trigger_type: Literal["manual", "auto"] = "manual",
+        peak_in_minutes: int | None = None,
+        stress_at_trigger: float | None = None,
+    ) -> None:
         """
-        Manual operator trigger: start dispatch immediately.
+        Start dispatch (manual operator or auto-orchestrator). Per-AC pre-cool times use construction type leads.
         """
 
         if not self._dispatch_active:
@@ -214,7 +234,8 @@ class DemoSimEngine:
             self._dispatch_peak_at = now + timedelta(minutes=75)
             self._dispatch_schedule_at = {}
             self._dispatch_schedule_at_by_ac = {}
-            self._events.insert(0, f"{now.strftime('%H:%M')} — Grid stress 82 — dispatch triggered (pre-cooling)")
+            label = "Auto" if trigger_type == "auto" else "Grid"
+            self._events.insert(0, f"{now.strftime('%H:%M')} — {label} — dispatch triggered (pre-cooling)")
             self._events.insert(0, f"{now.strftime('%H:%M')} — MirAIe fleet — setpoint -2°C for enrolled buildings")
             # Schedule construction-type-aware pre-cooling start times per AC.
             for b in self.seeded_buildings:
@@ -229,11 +250,44 @@ class DemoSimEngine:
                     self._dispatch_schedule_at_by_ac[ac["ac_id"]] = start_at
                 peak_at = self._dispatch_peak_at or (now + timedelta(minutes=75))
                 self._dispatch_schedule_at[b.building_id] = min(starts) if starts else (peak_at - timedelta(minutes=90))
+            # MirAIe adapter: best-effort precool command per AC (demo: deterministic ack).
+            for b in self.seeded_buildings:
+                for ac in self._acs_by_building.get(b.building_id, []):
+                    try:
+                        self.miraie_adapter.send_precool(ac["ac_id"], -2.0)
+                    except Exception:
+                        pass
             # Queue per-building acknowledgements over the next ~20 seconds.
             self._pending_acks = {}
             for idx, b in enumerate(self.seeded_buildings):
                 self._pending_acks[b.building_id] = now + timedelta(seconds=2 + idx * 2)
             del self._events[30:]
+
+            if trigger_type == "auto":
+                self._last_auto_dispatch_at = now
+
+            pk = int(peak_in_minutes) if peak_in_minutes is not None else 90
+            st = float(stress_at_trigger) if stress_at_trigger is not None else 82.0
+            schedule_dispatch_event(
+                ts=now,
+                trigger_type=trigger_type,
+                peak_in_minutes=pk,
+                stress_score=st,
+            )
+
+    def _finalize_dispatch(self, *, now: datetime) -> None:
+        if not self._dispatch_active:
+            return
+        self._dispatch_active = False
+        self._dispatch_until = None
+        for b in self.seeded_buildings:
+            for ac in self._acs_by_building.get(b.building_id, []):
+                try:
+                    self.miraie_adapter.restore_setpoint(ac["ac_id"])
+                except Exception:
+                    pass
+        self._events.insert(0, f"{now.strftime('%H:%M')} — Dispatch ended — returning setpoints to normal")
+        del self._events[30:]
 
     def _flush_pending_acks(self, now: datetime) -> None:
         if not self._pending_acks:
@@ -490,21 +544,36 @@ class DemoSimEngine:
         score = int(round((predicted_mw - 4700.0) / 20.0))
         return max(0, min(100, score))
 
+    def hourly_predicted_mw_fallback(self, *, now: datetime, horizon: int) -> list[float]:
+        """
+        Hour-ahead predicted MW using the same synthetic demand physics as the demo curve
+        (used by `/ml/predict` and ML runtime fallback).
+        """
+
+        out: list[float] = []
+        for h in range(1, max(1, int(horizon)) + 1):
+            ts = now + timedelta(hours=h)
+            base = self._base_demand_mw(ts)
+            temp_c, _ = self._sim_temperature(ts)
+            temp_boost = (temp_c - 28.0) * 55.0
+            out.append(float(base + temp_boost))
+        return out
+
     def _maybe_trigger_demo_event(self, now: datetime, stress_score: int) -> None:
         """
-        Force a demo-visible stress event at 5:45 PM IST (or if stress naturally high).
+        Phase 1 storyboard dispatch when ML is off; Phase 2 auto-dispatch uses the scheduler when ML is on.
         """
 
-        is_demo_time = (now.hour == 17 and now.minute >= 45) or (now.hour == 18)
-        should_dispatch = is_demo_time or stress_score >= 75
+        settings = get_settings()
+        if not settings.USE_ML_FORECAST:
+            is_demo_time = (now.hour == 17 and now.minute >= 45) or (now.hour == 18)
+            should_dispatch = is_demo_time or stress_score >= 75
 
-        if should_dispatch and not self._dispatch_active:
-            self.trigger_dispatch(now=now, minutes=90)
+            if should_dispatch and not self._dispatch_active:
+                self.trigger_dispatch(now=now, minutes=90, trigger_type="manual")
 
         if self._dispatch_active and self._dispatch_until and now >= self._dispatch_until:
-            self._dispatch_active = False
-            self._dispatch_until = None
-            self._events.insert(0, f"{now.strftime('%H:%M')} — Dispatch ended — returning setpoints to normal")
+            self._finalize_dispatch(now=now)
 
         # Keep event feed bounded.
         del self._events[30:]
@@ -528,13 +597,40 @@ class DemoSimEngine:
 
         rate_inr_per_kwh = 8.0  # demo value (transparent, can be tuned)
         kwh = (estimated_kw_reduction * dt_hours)
-        self._credits_inr += kwh * rate_inr_per_kwh
+        delta_inr = kwh * rate_inr_per_kwh
+        self._credits_inr += delta_inr
+
+        total_kw = sum(b.ac_count * 1.4 for b in self.seeded_buildings) or 1.0
+        schedule_append_credits_ledger_entry(
+            ts=now,
+            building_id=None,
+            delta_inr=delta_inr,
+            cumulative_inr=float(self._credits_inr),
+            dispatch_active=True,
+            source="dispatch_accrual",
+        )
+        for b in self.seeded_buildings:
+            share = (b.ac_count * 1.4) / total_kw
+            b_delta = delta_inr * share
+            bid = b.building_id
+            prev = self._credits_inr_by_building.get(bid, 0.0)
+            cum_b = prev + b_delta
+            self._credits_inr_by_building[bid] = cum_b
+            schedule_append_credits_ledger_entry(
+                ts=now,
+                building_id=bid,
+                delta_inr=b_delta,
+                cumulative_inr=cum_b,
+                dispatch_active=True,
+                source="dispatch_accrual",
+            )
 
     def get_dashboard_snapshot(self, now: datetime) -> DashboardSnapshot:
         """
         Produce a single payload for the frontend. This is the canonical real-time contract for Phase 1.
         """
 
+        settings = get_settings()
         temperature_c, heat_index_c = self._sim_temperature(now)
 
         # Forecast curve for next 6 hours at 15-minute intervals.
@@ -559,31 +655,106 @@ class DemoSimEngine:
         if self._dispatch_active:
             estimated_kw_reduction = round(enrolled_kw_total * 0.22 * max(0.15, building_frac), 1)
 
-        for i in range(0, 6 * 4 + 1):
-            ts = now + timedelta(minutes=15 * i)
-            base = self._base_demand_mw(ts)
+        ml_block: dict[str, object] | None = None
+        fr = None
+        if settings.USE_ML_FORECAST:
+            try:
+                from app.ml.forecast_cache import get_cached_forecast, set_cached_forecast
+                from app.ml.forecast_service import (
+                    interpolate_hourly_to_15min,
+                    resolve_data_csv,
+                    run_forecast,
+                )
 
-            # Temperature raises demand (AC load).
-            temp_boost = (temperature_c - 28.0) * 55.0
-            predicted = base + temp_boost
+                fr = get_cached_forecast()
+                if fr is None:
+                    fr = run_forecast(
+                        settings=settings,
+                        now=now,
+                        horizon=settings.ML_FORECAST_HORIZON_HOURS,
+                        engine=self,
+                    )
+                    set_cached_forecast(fr)
+                load_now: float
+                try:
+                    import pandas as pd
 
-            # Actual follows predicted with tiny smooth variance.
-            actual = predicted * (0.995 + 0.01 * math.sin(i / 3.5))
+                    pcsv = resolve_data_csv(settings)
+                    if pcsv.is_file():
+                        df_tail = pd.read_csv(pcsv)
+                        load_now = float(pd.to_numeric(df_tail["load_mw"], errors="coerce").iloc[-1])
+                    else:
+                        load_now = float(self._base_demand_mw(now) + (temperature_c - 28.0) * 55.0)
+                except Exception:
+                    load_now = float(self._base_demand_mw(now) + (temperature_c - 28.0) * 55.0)
 
-            # Apply intervention: flatten during the critical hour (6:00–8:00 PM).
-            if self._dispatch_active and 18 <= ts.hour <= 20:
-                predicted = max(0.0, predicted - (estimated_kw_reduction * 0.9))
-                actual = max(0.0, actual - (estimated_kw_reduction * 0.7))
-
-            points.append(
-                {
-                    "ts": ts.isoformat(),
-                    "predicted_mw": round(predicted, 1),
-                    "actual_mw": round(actual, 1),
+                hourly_slice = fr.forecast_load_mw[:6] if len(fr.forecast_load_mw) >= 6 else list(fr.forecast_load_mw)
+                pairs = interpolate_hourly_to_15min(
+                    now=now,
+                    hourly_loads=hourly_slice,
+                    hours_ahead=6,
+                    load_now=load_now,
+                )
+                for i, (ts, pred) in enumerate(pairs):
+                    predicted = float(pred)
+                    actual = predicted * (0.995 + 0.01 * math.sin(i / 3.5))
+                    if self._dispatch_active and 18 <= ts.hour <= 20:
+                        predicted = max(0.0, predicted - (estimated_kw_reduction * 0.9))
+                        actual = max(0.0, actual - (estimated_kw_reduction * 0.7))
+                    points.append(
+                        {
+                            "ts": ts.isoformat(),
+                            "predicted_mw": round(predicted, 1),
+                            "actual_mw": round(actual, 1),
+                        }
+                    )
+                ml_block = {
+                    "enabled": True,
+                    "source": fr.source,
+                    "artifact_status": fr.artifact_status,
+                    "last_refresh_ts": fr.generated_at,
                 }
-            )
+            except Exception:
+                fr = None
+                points = []
+                ml_block = {
+                    "enabled": True,
+                    "source": "sim_fallback",
+                    "artifact_status": "error",
+                    "last_refresh_ts": now.astimezone().isoformat(),
+                }
 
-        stress_score = self._stress_score(points[0]["predicted_mw"])
+        if not points:
+            for i in range(0, 6 * 4 + 1):
+                ts = now + timedelta(minutes=15 * i)
+                base = self._base_demand_mw(ts)
+
+                # Temperature raises demand (AC load).
+                temp_boost = (temperature_c - 28.0) * 55.0
+                predicted = base + temp_boost
+
+                # Actual follows predicted with tiny smooth variance.
+                actual = predicted * (0.995 + 0.01 * math.sin(i / 3.5))
+
+                # Apply intervention: flatten during the critical hour (6:00–8:00 PM).
+                if self._dispatch_active and 18 <= ts.hour <= 20:
+                    predicted = max(0.0, predicted - (estimated_kw_reduction * 0.9))
+                    actual = max(0.0, actual - (estimated_kw_reduction * 0.7))
+
+                points.append(
+                    {
+                        "ts": ts.isoformat(),
+                        "predicted_mw": round(predicted, 1),
+                        "actual_mw": round(actual, 1),
+                    }
+                )
+
+        if fr is not None:
+            from app.ml.forecast_service import ml_window_stress_score
+
+            stress_score = int(round(ml_window_stress_score(fr)))
+        else:
+            stress_score = self._stress_score(points[0]["predicted_mw"])
 
         # Operator override (demo safety net)
         if self._forced_stress_until and self._forced_stress_score is not None:
@@ -648,7 +819,7 @@ class DemoSimEngine:
             self._events.insert(0, f"{now.strftime('%H:%M:%S')} — Telemetry — dashboard snapshot updated")
             del self._events[30:]
 
-        return {
+        snap: DashboardSnapshot = {
             "ts": now.isoformat(),
             "city": "Chennai",
             "stress_score": int(stress_score),
@@ -667,4 +838,7 @@ class DemoSimEngine:
                 "dispatch_until": self._dispatch_until.isoformat() if self._dispatch_until else None,
             },
         }
+        if ml_block is not None:
+            snap["ml"] = ml_block
+        return snap
 

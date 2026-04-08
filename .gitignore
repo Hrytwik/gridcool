@@ -11,6 +11,9 @@ __pycache__/
 backend/.venv/
 backend/.env
 
+# Trained ML binaries (regenerate with train_forecast)
+backend/artifacts/
+
 # Node
 node_modules/
 npm-debug.log*

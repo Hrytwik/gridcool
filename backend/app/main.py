@@ -2,21 +2,31 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 from contextlib import asynccontextmanager
 from datetime import datetime
 
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import get_settings
 from app.db.mongo import close_mongo, connect_mongo, ping_mongo
+from app.jobs.forecast_scheduler import (
+    auto_dispatch_trigger_job,
+    refresh_forecast_job,
+    refresh_forecast_job_sync,
+)
 from app.routers.buildings import router as buildings_router
 from app.routers.demo import router as demo_router
+from app.routers.ml import router as ml_router
 from app.routers.thermal import router as thermal_router
 from app.state import demo_engine, ws_manager
 
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
+_scheduler: AsyncIOScheduler | None = None
 
 
 @asynccontextmanager
@@ -39,6 +49,42 @@ async def lifespan(app: FastAPI):
 
     # Best-effort DB connection for Phase 1 (works with Atlas or local Mongo).
     connect_mongo()
+    runtime_settings = get_settings()
+
+    global _scheduler
+    _scheduler = AsyncIOScheduler()
+
+    def _safe_refresh() -> None:
+        try:
+            refresh_forecast_job_sync()
+        except Exception:
+            logger.exception("initial forecast refresh failed")
+
+    try:
+        _safe_refresh()
+    except Exception:
+        pass
+
+    try:
+        _scheduler.add_job(
+            refresh_forecast_job,
+            "interval",
+            minutes=max(1, runtime_settings.ML_FORECAST_REFRESH_MINUTES),
+            id="refresh_forecast",
+            replace_existing=True,
+            misfire_grace_time=120,
+        )
+        _scheduler.add_job(
+            auto_dispatch_trigger_job,
+            "interval",
+            minutes=1,
+            id="auto_dispatch",
+            replace_existing=True,
+            misfire_grace_time=60,
+        )
+        _scheduler.start()
+    except Exception:
+        logger.exception("scheduler start failed; continuing without jobs")
 
     task = asyncio.create_task(_broadcast_loop())
     try:
@@ -46,8 +92,12 @@ async def lifespan(app: FastAPI):
     finally:
         stop_event.set()
         task.cancel()
-        with contextlib.suppress(Exception):
+        with contextlib.suppress(asyncio.CancelledError, Exception):
             await task
+        if _scheduler is not None:
+            with contextlib.suppress(Exception):
+                _scheduler.shutdown(wait=False)
+            _scheduler = None
         close_mongo()
 
 
@@ -55,6 +105,7 @@ app = FastAPI(title=settings.APP_NAME, lifespan=lifespan)
 app.include_router(demo_router)
 app.include_router(buildings_router)
 app.include_router(thermal_router)
+app.include_router(ml_router)
 
 app.add_middleware(
     CORSMiddleware,

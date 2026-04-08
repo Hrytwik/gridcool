@@ -29,6 +29,15 @@ class Settings(BaseSettings):
     # Real-time
     WS_BROADCAST_INTERVAL_SECONDS: int = 10
 
+    # ML forecast (Phase 2 foundation; off by default for demo safety)
+    USE_ML_FORECAST: bool = False
+    ML_ARTIFACT_DIR: str = "artifacts/ml"
+    ML_FORECAST_HORIZON_HOURS: int = 12
+    ML_DATA_CSV: str = "backend/data/chennai_hourly_load.csv"
+    ML_FORECAST_REFRESH_MINUTES: int = 15
+    AUTO_DISPATCH_ENABLED: bool = True
+    AUTO_DISPATCH_COOLDOWN_MINUTES: int = 120
+
 
 @lru_cache
 def get_settings() -> Settings:

@@ -2,7 +2,10 @@ import { useMemo, useState } from 'react'
 import { motion } from 'framer-motion'
 import { demoEnrollBuilding, demoForceStress, demoTriggerDispatch } from '../lib/api'
 
-export function OperatorConsole(props: { dispatchActive: boolean }) {
+export function OperatorConsole(props: {
+  dispatchActive: boolean
+  ml?: { source: string; artifact_status: string } | null
+}) {
   const [busy, setBusy] = useState<string | null>(null)
   const [err, setErr] = useState<string | null>(null)
   const [ok, setOk] = useState<string | null>(null)
@@ -66,15 +69,25 @@ export function OperatorConsole(props: { dispatchActive: boolean }) {
             </div>
           </div>
 
-          {props.dispatchActive ? (
-            <div className="rounded-full border border-[rgba(0,212,255,0.35)] bg-black/20 px-3 py-1 font-mono text-[10px] tracking-[0.28em] text-[rgba(0,212,255,0.9)]">
-              DISPATCH LIVE
-            </div>
-          ) : (
-            <div className="rounded-full border border-[rgba(64,87,140,0.35)] bg-black/20 px-3 py-1 font-mono text-[10px] tracking-[0.28em] text-[var(--gc-muted)]">
-              STANDBY
-            </div>
-          )}
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            {props.ml ? (
+              <div
+                className="rounded-full border border-[rgba(140,160,200,0.35)] bg-black/20 px-3 py-1 font-mono text-[10px] tracking-[0.22em] text-[var(--gc-muted)]"
+                title="Forecast driver from websocket snapshot"
+              >
+                FCST: {props.ml.source === 'ml' ? 'ML' : 'SIM'} · {props.ml.artifact_status}
+              </div>
+            ) : null}
+            {props.dispatchActive ? (
+              <div className="rounded-full border border-[rgba(0,212,255,0.35)] bg-black/20 px-3 py-1 font-mono text-[10px] tracking-[0.28em] text-[rgba(0,212,255,0.9)]">
+                DISPATCH LIVE
+              </div>
+            ) : (
+              <div className="rounded-full border border-[rgba(64,87,140,0.35)] bg-black/20 px-3 py-1 font-mono text-[10px] tracking-[0.28em] text-[var(--gc-muted)]">
+                STANDBY
+              </div>
+            )}
+          </div>
         </div>
 
         <div className="mt-4 grid gap-2 sm:grid-cols-2">

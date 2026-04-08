@@ -191,7 +191,7 @@ function App() {
 
               {snapshot ? <CreditCounter value={snapshot.credits_inr} accent={accent} /> : <Skeleton className="h-[140px] w-full" />}
               {snapshot ? <ThermalIntelligencePanel buildings={snapshot.buildings} /> : <Skeleton className="h-[420px] w-full" />}
-              <OperatorConsole dispatchActive={dispatchActive} />
+              <OperatorConsole dispatchActive={dispatchActive} ml={snapshot?.ml} />
             </div>
           </div>
         ) : null}
